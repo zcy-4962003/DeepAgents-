@@ -156,8 +156,7 @@
 ### 2. 安装依赖
 
 ```bash
-# 后端（使用 py36 环境）
-conda activate py36
+# 后端
 pip install -r requirements.txt
 
 # 前端
