@@ -447,7 +447,7 @@ Worker 进程没启动。执行 `arq app.queue.worker.WorkerSettings` 起一个 
 
 ## 开发提示
 
-- **Python 解释器**：本项目依赖装在 conda 环境 `py36`（Python 3.12），请勿使用
+- **Python 解释器**：本项目依赖装在 conda 环境（Python 3.12），请勿使用
   系统默认 Python。Windows 下建议加上 `PYTHONIOENCODING=utf-8` 以免中文日志乱码。
 - **改了后端代码**：`python main.py` 带 `--reload` 会自动重启，**但 worker 不会**，
   需手动重启 `arq` 进程。
@@ -457,3 +457,4 @@ Worker 进程没启动。执行 `arq app.queue.worker.WorkerSettings` 起一个 
 - **数据库迁移**：改完 `app/db/models.py` 后执行
   `alembic revision --autogenerate -m "描述"` 生成迁移，再
   `alembic upgrade head` 应用。
+- **管理员端页面暂时未进行开发**，仅提供 API 接口。
