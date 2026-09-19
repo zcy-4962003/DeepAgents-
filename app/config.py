@@ -187,7 +187,7 @@ TASK_JOB_TIMEOUT_SECONDS = _env_int("TASK_JOB_TIMEOUT_SECONDS", 900)
 # worker 并发处理的任务数，限制同时运行的 LLM/DB 压力
 TASK_MAX_JOBS = _env_int("TASK_MAX_JOBS", 2)
 # 重试退避基数：第 n 次重试等待 retry_base * 2^(n-1) 秒
-TASK_RETRY_BASE_SECONDS = _env_int("TASK_RETRY_BASE_SECONDS", 15)
+TASK_RETRY_BASE_SECONDS = _env_int("TASK_RETRY_BASE_SECONDS", 5)
 # 取消信号的轮询间隔，决定点“取消”后多久真正中断
 TASK_CANCEL_POLL_SECONDS = _env_float("TASK_CANCEL_POLL_SECONDS", 2.0)
 

@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from arq import cron
+from arq import Retry, cron
 from sqlalchemy import select
 
 from app import config
@@ -194,6 +194,49 @@ async def _finalize_files(task_id: str, user_id: uuid.UUID) -> int:
     return count
 
 
+def _is_retryable(exc: BaseException) -> bool:
+    """
+    判断异常是否值得重试。
+
+    只对「瞬时错误」（网络抖动、超时、限流、上游 5xx）重试；确定性错误
+    （鉴权失败、参数/模型名错误、编程错误）重试结果一样，直接判失败可省下
+    无谓的 LLM 调用与退避等待。
+
+    默认返回 True：未知异常按可重试处理，保留「最多重试 max_attempts 次」的
+    兜底语义，避免把瞬时的未知错误误判为永久失败。
+    """
+    # 内置瞬时错误：TimeoutError（含 asyncio 超时）、ConnectionError（连接类）
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+
+    name = type(exc).__name__
+    # OpenAI 兼容协议（langchain-openai / qwen / dashscope）的瞬时错误按类名识别
+    if name in {
+        "APITimeoutError",
+        "APIConnectionError",
+        "APIConnectionTimeoutError",
+        "RateLimitError",
+        "InternalServerError",
+        "ServiceUnavailableError",
+    }:
+        return True
+    # 确定性错误：重试也不会成功，直接判失败
+    if name in {
+        "BadRequestError",
+        "AuthenticationError",
+        "PermissionDeniedError",
+        "NotFoundError",
+        "UnprocessableEntityError",
+        "ValueError",
+        "TypeError",
+        "KeyError",
+        "AttributeError",
+        "NameError",
+    }:
+        return False
+    return True
+
+
 async def run_task(
     ctx: dict[str, Any],
     task_id: str,
@@ -245,8 +288,8 @@ async def run_task(
         error_text = f"{type(exc).__name__}: {exc}"
         print(f"[Worker] 任务 {task_id} 执行失败：{error_text}")
 
-        if task.attempts >= max_attempts:
-            # 达到重试上限，本次彻底失败，把原因写给前端
+        if task.attempts >= max_attempts or not _is_retryable(exc):
+            # 达到重试上限，或异常不可重试（确定性失败）：落终态，裸抛让 arq 判失败
             await _mark_finished(task_id, TASK_STATUS_FAILED, error=error_text)
             await record_event(
                 task_id,
@@ -259,23 +302,26 @@ async def run_task(
                 },
                 user_uuid,
             )
-        else:
-            # 未达上限，交给 arq 按退避策略重试
-            await record_event(
-                task_id,
-                {
-                    "type": "monitor_event",
-                    "event": "task_status",
-                    "message": (
-                        f"执行失败，将在稍后自动重试"
-                        f"（{task.attempts}/{max_attempts}）：{error_text}"
-                    ),
-                    "data": {"status": "retrying", "attempt": task.attempts},
-                    "timestamp": _now().isoformat(),
-                },
-                user_uuid,
-            )
-        raise
+            raise
+        # 未达上限且异常可重试：抛 arq.Retry，让 arq 按指数退避重投。
+        # 注意裸 raise 抛的是通用异常，arq 的 retry_jobs 只认 Retry/CancelledError/RetryJob，
+        # 通用异常会被直接判失败、从队列摘掉，永远不会自动重试。
+        backoff = config.TASK_RETRY_BASE_SECONDS * (2 ** (task.attempts - 1))
+        await record_event(
+            task_id,
+            {
+                "type": "monitor_event",
+                "event": "task_status",
+                "message": (
+                    f"执行失败，将在稍后自动重试"
+                    f"（{task.attempts}/{max_attempts}）：{error_text}"
+                ),
+                "data": {"status": "retrying", "attempt": task.attempts},
+                "timestamp": _now().isoformat(),
+            },
+            user_uuid,
+        )
+        raise Retry(defer=backoff)
 
     if cancelled:
         await _mark_finished(task_id, TASK_STATUS_CANCELLED, error="用户取消")
